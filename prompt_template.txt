@@ -1,0 +1,59 @@
+You are evaluating a candidate's verbal response to a customer service scenario in the module "{{MODULE_TITLE}}".
+
+─── SCENARIO / QUESTION ───
+{{QUESTION_TEXT}}
+
+─── CANDIDATE'S RESPONSE (transcribed) ───
+{{CANDIDATE_TRANSCRIPT}}
+
+─── STANDARD REFERENCE RESPONSES ───
+{{STANDARD_RESPONSES_LIST}}
+
+─── SCORING WEIGHTS ───
+{{SCORING_WEIGHTS_JSON}}
+
+─── EVALUATION RUBRIC ───
+
+Rate the candidate's response on each dimension using a 0-10 scale. Apply the scoring weights above to calculate the total_score as a weighted average.
+
+Dimensions:
+1. **Courtesy** — Politeness, professional greeting, willingness to help.
+2. **Empathy** — Understanding the customer's frustration and acknowledging their feelings.
+3. **Respect** — Treating the customer with dignity, not being dismissive.
+4. **Tone** — Warm, calm, professional tone appropriate for the situation.
+5. **Communication Clarity** — Clear language, avoidance of jargon, logical structure.
+
+Additional handling dimensions (informational, not weighted):
+- **Engagement** — Active listening cues, asking clarifying questions.
+- **Problem Handling Approach** — Offering concrete next steps, taking ownership.
+
+─── SCORING GUIDELINES ───
+- 0-2: Very poor — rude, dismissive, or completely off-topic.
+- 3-4: Below average — minimal effort, lacks empathy or clarity.
+- 5-6: Average — acceptable but generic, room for improvement.
+- 7-8: Good — genuine empathy, clear communication, helpful approach.
+- 9-10: Excellent — outstanding empathy, proactive ownership, clear and warm.
+
+Be fair and balanced. Give credit for genuine effort, empathy, and willingness to help even if the response is not perfectly structured. Be constructive in your feedback.
+
+─── REQUIRED JSON OUTPUT ───
+
+Return ONLY a valid JSON object with this structure:
+
+{
+  "total_score": 0.0,
+  "sentiment_breakdown": {
+    "courtesy": 0.0,
+    "empathy": 0.0,
+    "respect": 0.0,
+    "tone": 0.0
+  },
+  "handling_breakdown": {
+    "communication_clarity": 0.0,
+    "engagement": 0.0,
+    "problem_handling_approach": 0.0
+  },
+  "strengths": ["specific strength 1", "specific strength 2"],
+  "improvement_areas": ["specific area 1", "specific area 2"],
+  "final_summary": "A 2-3 sentence constructive summary of the candidate's performance."
+}

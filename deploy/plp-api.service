@@ -1,0 +1,45 @@
+# ── PLP Assessment API — systemd Service ──
+#
+# Install:
+#   1. Edit paths below to match your server
+#   2. sudo cp deploy/plp-api.service /etc/systemd/system/plp-api.service
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable plp-api
+#   5. sudo systemctl start plp-api
+#
+# Logs:
+#   sudo journalctl -u plp-api -f
+
+[Unit]
+Description=PLP Assessment API (FastAPI + Gunicorn)
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=notify
+User=ubuntu
+Group=ubuntu
+
+# ── Paths (edit these) ──
+WorkingDirectory=/home/ubuntu/wms_api
+ExecStart=/home/ubuntu/wms_api/venv/bin/gunicorn -c gunicorn.conf.py app.main:app
+
+# ── Environment ──
+EnvironmentFile=/home/ubuntu/wms_api/.env
+Environment=ENV=prod
+Environment=PATH=/home/ubuntu/wms_api/venv/bin:/usr/local/bin:/usr/bin
+
+# ── Restart policy ──
+Restart=always
+RestartSec=5
+
+# ── Resource limits ──
+LimitNOFILE=65535
+
+# ── Logging ──
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plp-api
+
+[Install]
+WantedBy=multi-user.target

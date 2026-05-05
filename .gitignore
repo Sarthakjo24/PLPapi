@@ -1,0 +1,104 @@
+# ------------------------------
+# Python cache & compiled files
+# ------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ------------------------------
+# Virtual environments
+# ------------------------------
+venv/
+env/
+ENV/
+.venv/
+
+# ------------------------------
+# Environment variables
+# ------------------------------
+.env
+.env.*
+*.env
+
+# ------------------------------
+# Logs & runtime files
+# ------------------------------
+*.log
+logs/
+*.out
+*.err
+
+# ------------------------------
+# OS files
+# ------------------------------
+.DS_Store
+Thumbs.db
+
+# ------------------------------
+# IDE / Editor files
+# ------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ------------------------------
+# Build / distribution
+# ------------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ------------------------------
+# Testing
+# ------------------------------
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ------------------------------
+# Database files
+# ------------------------------
+*.sqlite3
+*.db
+
+# ------------------------------
+# Whisper / AI model files
+# (VERY IMPORTANT for your project)
+# ------------------------------
+models/
+*.bin
+*.pt
+*.onnx
+
+# ------------------------------
+# Temporary files
+# ------------------------------
+tmp/
+temp/
+*.tmp
+
+# ------------------------------
+# Celery / background jobs
+# ------------------------------
+celerybeat-schedule
+celerybeat.pid
+
+# ------------------------------
+# Uploads / audio files
+# ------------------------------
+uploads/
+audio/
+*.wav
+*.mp3
+
+# ------------------------------
+# Node (if any leftover frontend)
+# ------------------------------
+node_modules/
+
+# ------------------------------
+# Render / deployment
+# ------------------------------
+.env.local
