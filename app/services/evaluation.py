@@ -29,6 +29,7 @@ _RETRYABLE = (
     ConnectionError,
     OSError,
     RuntimeError,
+    ValueError,
 )
 
 
@@ -66,6 +67,30 @@ class EvaluationService:
         scoring_weights: dict[str, float],
     ) -> dict[str, Any]:
         """Evaluate a single candidate answer against standard responses."""
+        if not transcript_text.strip():
+            return {
+                "total_score": 0.0,
+                "sentiment_breakdown": {
+                    "courtesy": 0.0,
+                    "empathy": 0.0,
+                    "respect": 0.0,
+                    "tone": 0.0,
+                },
+                "handling_breakdown": {
+                    "communication_clarity": 0.0,
+                    "engagement": 0.0,
+                    "problem_handling_approach": 0.0,
+                },
+                "strengths": ["No supported speech was detected in the recording."],
+                "improvement_areas": [
+                    "Provide a clear spoken response in supported English or Hindi."
+                ],
+                "final_summary": (
+                    "The recording could not be evaluated because no supported "
+                    "transcript was produced."
+                ),
+            }
+
         if self._client is None:
             raise RuntimeError("OpenAI client not configured (missing OPENAI_API_KEY).")
 
@@ -85,9 +110,9 @@ class EvaluationService:
             except _RETRYABLE as exc:
                 last_error = exc
                 if attempt < settings.max_retries - 1:
-                    wait = float(2 ** attempt)
+                    wait = float(2**attempt)
                     logger.warning(
-                        "Evaluation attempt %d failed: %s — retrying in %.0fs",
+                        "Evaluation attempt %d failed: %s; retrying in %.0fs",
                         attempt + 1,
                         exc,
                         wait,
@@ -122,18 +147,21 @@ class EvaluationService:
         for attempt in range(settings.max_retries):
             try:
                 async with self._semaphore:
-                    result = await self._invoke(prompt, system_msg=(
-                        "You create fair, balanced, and accurate candidate "
-                        "performance summaries. Be encouraging where warranted. "
-                        "Return JSON only."
-                    ))
+                    result = await self._invoke(
+                        prompt,
+                        system_msg=(
+                            "You create fair, balanced, and accurate candidate "
+                            "performance summaries. Be encouraging where warranted. "
+                            "Return JSON only."
+                        ),
+                    )
                     if result.get("overall_summary"):
                         return result
-                    raise RuntimeError("Missing overall_summary in model output.")
+                    raise ValueError("Missing overall_summary in model output.")
             except _RETRYABLE as exc:
                 last_error = exc
                 if attempt < settings.max_retries - 1:
-                    await asyncio.sleep(float(2 ** attempt))
+                    await asyncio.sleep(float(2**attempt))
 
         logger.warning(
             "OpenAI summary failed after retries (%s), using heuristic fallback.",
@@ -151,7 +179,8 @@ class EvaluationService:
 
         default_system = (
             "You are a fair and balanced behavior-based customer service evaluator. "
-            "Be encouraging where warranted and constructive in feedback. Return JSON only."
+            "Be encouraging where warranted and constructive in feedback. "
+            "Return JSON only."
         )
         response = await self._client.chat.completions.create(
             model=settings.openai_model,
@@ -227,83 +256,106 @@ class EvaluationService:
         )
 
     def _normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        n = dict(payload)
-        if n.get("total_score") is None and n.get("score") is not None:
-            n["total_score"] = n["score"]
-        n["total_score"] = coerce_numeric(n.get("total_score"))
+        normalized = dict(payload)
+        if normalized.get("total_score") is None and normalized.get("score") is not None:
+            normalized["total_score"] = normalized["score"]
+        normalized["total_score"] = coerce_numeric(normalized.get("total_score"))
 
-        sb = n.get("sentiment_breakdown") or {}
+        sentiment = normalized.get("sentiment_breakdown") or {}
         for key in ("courtesy", "respect", "empathy", "tone"):
-            if sb.get(key) is None and n.get(f"{key}_score") is not None:
-                sb[key] = n[f"{key}_score"]
-            sb[key] = coerce_numeric(sb.get(key))
-        n["sentiment_breakdown"] = sb
+            if sentiment.get(key) is None and normalized.get(f"{key}_score") is not None:
+                sentiment[key] = normalized[f"{key}_score"]
+            sentiment[key] = coerce_numeric(sentiment.get(key))
+        normalized["sentiment_breakdown"] = sentiment
 
-        hb = n.get("handling_breakdown") or {}
-        comm = n.get("communication_score")
-        for key in ("communication_clarity", "engagement", "problem_handling_approach"):
-            if hb.get(key) is None and comm is not None:
-                hb[key] = comm
-            hb[key] = coerce_numeric(hb.get(key))
-        n["handling_breakdown"] = hb
+        handling = normalized.get("handling_breakdown") or {}
+        communication_score = normalized.get("communication_score")
+        for key in (
+            "communication_clarity",
+            "engagement",
+            "problem_handling_approach",
+        ):
+            if handling.get(key) is None and communication_score is not None:
+                handling[key] = communication_score
+            handling[key] = coerce_numeric(handling.get(key))
+        normalized["handling_breakdown"] = handling
 
-        n["strengths"] = coerce_list_points(n.get("strengths"))
-        if n.get("improvement_areas") is None:
-            n["improvement_areas"] = n.get("weakness")
-        n["improvement_areas"] = coerce_list_points(n.get("improvement_areas"))
+        normalized["strengths"] = coerce_list_points(normalized.get("strengths"))
+        if normalized.get("improvement_areas") is None:
+            normalized["improvement_areas"] = normalized.get("weakness")
+        normalized["improvement_areas"] = coerce_list_points(
+            normalized.get("improvement_areas")
+        )
 
-        if not str(n.get("final_summary") or "").strip():
-            n["final_summary"] = str(n.get("feedback") or "").strip()
+        if not str(normalized.get("final_summary") or "").strip():
+            normalized["final_summary"] = str(normalized.get("feedback") or "").strip()
 
-        return n
+        return normalized
 
     def _heuristic_summary(
         self, evaluated_answers: list[dict[str, Any]]
     ) -> dict[str, Any]:
         scores = []
-        qws = []
+        question_scores = []
         all_strengths: list[str] = []
         all_weaknesses: list[str] = []
-        seen_s: set[str] = set()
-        seen_w: set[str] = set()
+        seen_strengths: set[str] = set()
+        seen_weaknesses: set[str] = set()
 
-        for ans in evaluated_answers:
-            ts = ans.get("total_score")
+        for answer in evaluated_answers:
+            score = answer.get("total_score")
             try:
-                s = float(ts)
+                numeric_score = float(score)
             except (TypeError, ValueError):
                 continue
-            scores.append(s)
-            qws.append({
-                "question_id": ans.get("question_id", ""),
-                "score": round(s, 2),
-            })
-            for item in ans.get("strengths", []):
-                norm = str(item).strip().lower()
-                if norm and norm not in seen_s and len(all_strengths) < 4:
-                    seen_s.add(norm)
+            scores.append(numeric_score)
+            question_scores.append(
+                {
+                    "question_id": answer.get("question_id", ""),
+                    "score": round(numeric_score, 2),
+                }
+            )
+            for item in answer.get("strengths", []):
+                normalized_item = str(item).strip().lower()
+                if (
+                    normalized_item
+                    and normalized_item not in seen_strengths
+                    and len(all_strengths) < 4
+                ):
+                    seen_strengths.add(normalized_item)
                     all_strengths.append(str(item).strip())
-            for item in ans.get("improvement_areas", []):
-                norm = str(item).strip().lower()
-                if norm and norm not in seen_w and len(all_weaknesses) < 3:
-                    seen_w.add(norm)
+            for item in answer.get("improvement_areas", []):
+                normalized_item = str(item).strip().lower()
+                if (
+                    normalized_item
+                    and normalized_item not in seen_weaknesses
+                    and len(all_weaknesses) < 3
+                ):
+                    seen_weaknesses.add(normalized_item)
                     all_weaknesses.append(str(item).strip())
 
-        avg = round(mean(scores), 2) if scores else None
+        average_score = round(mean(scores), 2) if scores else None
         count = len(evaluated_answers)
         summary = (
             f"Across {count} responses"
-            + (f" with an average score of {avg}/10" if avg else "")
+            + (f" with an average score of {average_score}/10" if average_score else "")
             + f", strengths include {', '.join(all_strengths) or 'polite tone'}."
-            + f" Areas for improvement: {', '.join(all_weaknesses) or 'showing more empathy'}."
+            + " Areas for improvement: "
+            + f"{', '.join(all_weaknesses) or 'showing more empathy'}."
         )
         return {
-            "total_score": avg,
+            "total_score": average_score,
             "strengths": all_strengths,
             "weaknesses": all_weaknesses,
-            "question_wise_scores": qws,
+            "question_wise_scores": question_scores,
             "overall_summary": summary,
         }
+
+    async def close(self) -> None:
+        """Close the OpenAI client if present."""
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
     @staticmethod
     def _default_prompt_template() -> str:

@@ -1,19 +1,14 @@
-"""Structured logging configuration.
-
-- ENV=prod → JSON logs (machine-parseable for ELK/Grafana/CloudWatch)
-- ENV=dev  → human-readable colored logs
-"""
+"""Structured logging configuration."""
 from __future__ import annotations
 
-import logging
-import os
 import json
+import logging
 import sys
 from datetime import datetime, timezone
 
 
 class JSONFormatter(logging.Formatter):
-    """Outputs each log record as a single JSON line."""
+    """Output each log record as a single JSON line."""
 
     def format(self, record: logging.LogRecord) -> str:
         log_entry = {
@@ -38,28 +33,20 @@ class DevFormatter(logging.Formatter):
         super().__init__(fmt=self.FORMAT, datefmt="%Y-%m-%d %H:%M:%S")
 
 
-def setup_logging(log_level: str = "INFO") -> None:
-    """Configure root logger based on environment."""
-    env = os.getenv("ENV", "dev").strip().lower()
+def setup_logging(log_level: str = "INFO", environment: str = "dev") -> None:
+    """Configure the root logger based on the active environment."""
+    env = str(environment or "dev").strip().lower()
     level = getattr(logging, log_level.upper(), logging.INFO)
 
     root = logging.getLogger()
     root.setLevel(level)
-
-    # Remove existing handlers to avoid duplicates
     root.handlers.clear()
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
-
-    if env == "prod":
-        handler.setFormatter(JSONFormatter())
-    else:
-        handler.setFormatter(DevFormatter())
-
+    handler.setFormatter(JSONFormatter() if env == "prod" else DevFormatter())
     root.addHandler(handler)
 
-    # Quiet down noisy third-party loggers
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

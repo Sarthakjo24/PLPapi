@@ -31,7 +31,7 @@ Interactive docs: `http://localhost:8000/docs`
 
 ### Authentication
 
-All endpoints except `/health` require the header:
+All endpoints except `/api/v1/health` require the header:
 
 ```
 X-API-Key: <your-configured-api-key>
@@ -41,7 +41,7 @@ X-API-Key: <your-configured-api-key>
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/v1/health` | ❌ | Service health check |
+| `GET` | `/api/v1/health` | ❌ | Service readiness check |
 | `POST` | `/api/v1/evaluate` | ✅ | Submit session for evaluation |
 | `GET` | `/api/v1/status/{job_id}` | ✅ | Poll job status / get results |
 | `POST` | `/api/v1/results/{job_id}/ack` | ✅ | Acknowledge receipt, clear cache |
@@ -157,10 +157,10 @@ WMS Frontend                    PLP Assessment API                Redis
     │                                  │                            │
     │                           [Background: download→transcribe→evaluate]
     │                                  │                            │
-    ├─GET /status/{job_id}────────────►│◄──read job─────────────────┤
+    ├─GET /api/v1/status/{job_id}─────►│◄──read job─────────────────┤
     │◄─{status: "processing"}──────────┤                            │
     │                                  │                            │
-    ├─GET /status/{job_id}────────────►│◄──read job─────────────────┤
+    ├─GET /api/v1/status/{job_id}─────►│◄──read job─────────────────┤
     │◄─{status: "completed", ...}──────┤                            │
     │                                  │                            │
     ├─POST /results/{job_id}/ack──────►│──delete job────────────────►│

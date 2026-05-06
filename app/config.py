@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import os
+import json
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,71 +20,110 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ── Environment ──
-    environment: str = "dev"  # "dev" or "prod"
+    app_name: str = "PLP Assessment API"
+    api_description: str = (
+        "AI-powered candidate assessment service for WMS integration."
+    )
+    api_version: str = "1.0.0"
+    api_prefix: str = "/api/v1"
 
-    # ── API Authentication ──
+    # Environment
+    environment: str = Field(
+        default="dev",
+        validation_alias=AliasChoices("ENVIRONMENT", "ENV"),
+    )
+
+    # API Authentication
     api_key: str = "change-me-api-key"
 
-    # ── OpenAI ──
+    # OpenAI
     openai_api_key: str = "sk-placeholder"
     openai_model: str = "gpt-4.1-mini"
-    openai_timeout_seconds: int = 45
+    openai_timeout_seconds: int = Field(default=45, gt=0)
 
-    # ── Redis ──
+    # Redis
     redis_url: str = "redis://localhost:6379/0"
-    redis_result_ttl_seconds: int = 1800
+    redis_result_ttl_seconds: int = Field(default=1800, gt=0)
 
-    # ── Faster-Whisper ──
+    # Faster-Whisper
     use_faster_whisper: bool = True
     faster_whisper_model: str = "small"
     faster_whisper_device: str = "cpu"
     faster_whisper_compute_type: str = "int8"
 
-    # ── Concurrency ──
-    max_concurrent_transcriptions: int = 3
-    max_concurrent_evaluations: int = 5
-    max_retries: int = 3
+    # Concurrency
+    max_concurrent_transcriptions: int = Field(default=3, ge=1)
+    max_concurrent_evaluations: int = Field(default=5, ge=1)
+    max_retries: int = Field(default=3, ge=0)
 
-    # ── Audio ──
-    audio_download_timeout_seconds: int = 30
-    max_audio_size_bytes: int = 50 * 1024 * 1024
+    # Audio
+    audio_download_timeout_seconds: int = Field(default=30, gt=0)
+    max_audio_size_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
 
-    # ── Scoring weights (defaults) ──
-    weight_courtesy: float = 1.5
-    weight_empathy: float = 1.5
-    weight_respect: float = 1.2
-    weight_tone: float = 1.0
-    weight_communication: float = 1.3
+    # Scoring weights
+    weight_courtesy: float = Field(default=1.5, gt=0)
+    weight_empathy: float = Field(default=1.5, gt=0)
+    weight_respect: float = Field(default=1.2, gt=0)
+    weight_tone: float = Field(default=1.0, gt=0)
+    weight_communication: float = Field(default=1.3, gt=0)
 
-    # ── Server ──
+    # Server
     host: str = "0.0.0.0"
-    port: int = 8000
-    web_workers: int = 4
+    port: int = Field(default=8000, ge=1, le=65535)
+    web_workers: int = Field(default=4, ge=1)
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"]
     )
     temp_audio_dir: str = "./tmp_audio"
     log_level: str = "INFO"
     prompt_template_path: str | None = None
+    docs_url: str | None = "/docs"
+    redoc_url: str | None = "/redoc"
+    openapi_url: str | None = "/openapi.json"
 
-    # ── Rate limiting ──
+    # Rate limiting
     rate_limit_evaluate: str = "10/minute"
     rate_limit_status: str = "60/minute"
 
-    # ── Timeout ──
-    request_timeout_seconds: int = 180
+    # Timeout
+    request_timeout_seconds: int = Field(default=180, gt=0)
+
+    @field_validator("environment", mode="before")
+    @classmethod
+    def normalize_environment(cls, value: Any) -> str:
+        env = str(value or "dev").strip().lower()
+        if env not in {"dev", "prod", "test"}:
+            raise ValueError("environment must be one of: dev, prod, test")
+        return env
 
     @field_validator("cors_origins", mode="before")
     @classmethod
-    def split_cors(cls, v: list[str] | str) -> list[str]:
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(",") if s.strip()]
-        return v
+    def split_cors(cls, value: list[str] | str) -> list[str]:
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                parsed = json.loads(raw)
+                if not isinstance(parsed, list):
+                    raise ValueError("CORS_ORIGINS JSON value must be a list.")
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @field_validator("docs_url", "redoc_url", "openapi_url", mode="before")
+    @classmethod
+    def normalize_optional_url_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        path = str(value).strip()
+        if not path or path.lower() in {"none", "null", "false", "off"}:
+            return None
+        return path if path.startswith("/") else f"/{path}"
 
     @property
     def is_prod(self) -> bool:
-        return self.environment.strip().lower() == "prod"
+        return self.environment == "prod"
 
     @property
     def scoring_weights(self) -> dict[str, float]:
@@ -96,21 +136,42 @@ class Settings(BaseSettings):
         }
 
     @property
+    def masked_redis_url(self) -> str:
+        if "@" not in self.redis_url:
+            return self.redis_url
+        return self.redis_url.split("@", maxsplit=1)[-1]
+
+    @property
     def effective_temp_dir(self) -> Path:
-        p = Path(self.temp_audio_dir)
-        if not p.is_absolute():
-            p = PROJECT_ROOT / p
-        p.mkdir(parents=True, exist_ok=True)
-        return p.resolve()
+        path = Path(self.temp_audio_dir)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        path.mkdir(parents=True, exist_ok=True)
+        return path.resolve()
 
     @property
     def effective_prompt_path(self) -> Path:
         if self.prompt_template_path:
-            p = Path(self.prompt_template_path)
-            if not p.is_absolute():
-                p = PROJECT_ROOT / p
-            return p.resolve()
+            path = Path(self.prompt_template_path)
+            if not path.is_absolute():
+                path = PROJECT_ROOT / path
+            return path.resolve()
         return PROJECT_ROOT / "prompt_template.txt"
+
+    def validate_runtime(self) -> None:
+        errors: list[str] = []
+        if self.is_prod and self.api_key == "change-me-api-key":
+            errors.append("API_KEY must not use the default placeholder in production.")
+        if self.is_prod and self.openai_api_key == "sk-placeholder":
+            errors.append(
+                "OPENAI_API_KEY must be configured with a real value in production."
+            )
+        if self.docs_url and self.docs_url == self.openapi_url:
+            errors.append("DOCS_URL and OPENAPI_URL must not share the same path.")
+        if self.redoc_url and self.redoc_url == self.openapi_url:
+            errors.append("REDOC_URL and OPENAPI_URL must not share the same path.")
+        if errors:
+            raise RuntimeError("Invalid runtime configuration: " + " ".join(errors))
 
 
 @lru_cache

@@ -1,65 +1,55 @@
-# API Testing Script for Windows PowerShell
-# Test all endpoints quickly
+# Quick endpoint checks for a running local server.
 
-$BASE_URL = "http://localhost:8000"
-$API_KEY = "sk_ozKY2x0hpTpcQ4rYV79eSFQpDTdKHQng9IoO8iQSqiC2fo9S"
+$BASE_URL = if ($env:BASE_URL) { $env:BASE_URL } else { "http://127.0.0.1:8000" }
+$API_PREFIX = if ($env:API_PREFIX) { $env:API_PREFIX } else { "/api/v1" }
+$API_KEY = $env:API_KEY
 
-Write-Host "🧪 API Endpoint Testing" -ForegroundColor Cyan
-Write-Host "=======================" -ForegroundColor Cyan
+Write-Host "API Endpoint Testing" -ForegroundColor Cyan
+Write-Host "====================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Health Check
-Write-Host "1️⃣  Testing Health Endpoint (No Auth)..." -ForegroundColor Green
+Write-Host "1. Testing health endpoint..." -ForegroundColor Green
 try {
-    $response = Invoke-RestMethod -Uri "$BASE_URL/health" -Method Get
-    $response | ConvertTo-Json | Write-Host
+    Invoke-RestMethod -Uri "$BASE_URL$API_PREFIX/health" -Method Get | ConvertTo-Json | Write-Host
 } catch {
-    Write-Host "❌ Error: $_" -ForegroundColor Red
+    Write-Host "Error: $_" -ForegroundColor Red
 }
 Write-Host ""
 
-# 2. Test Missing API Key (should fail)
-Write-Host "2️⃣  Testing API Key Requirement (Should return 403)..." -ForegroundColor Green
+Write-Host "2. Testing API key requirement (should return 403)..." -ForegroundColor Green
 try {
-    $response = Invoke-RestMethod -Uri "$BASE_URL/status/test-job-id" -Method Get -ErrorAction Stop
-    $response | ConvertTo-Json | Write-Host
+    Invoke-RestMethod -Uri "$BASE_URL$API_PREFIX/status/test-job-id" -Method Get -ErrorAction Stop | Out-Null
 } catch {
     if ($_.Exception.Response.StatusCode -eq 403) {
-        Write-Host "✓ Correctly rejected request without API key" -ForegroundColor Green
+        Write-Host "Correctly rejected request without API key" -ForegroundColor Green
     } else {
-        Write-Host "Response: $($_.Exception.Response.StatusCode)" -ForegroundColor Yellow
+        Write-Host "Unexpected response: $($_.Exception.Response.StatusCode)" -ForegroundColor Yellow
     }
 }
 Write-Host ""
 
-# 3. Test Status with Valid API Key
-Write-Host "3️⃣  Testing Status Endpoint with Valid API Key..." -ForegroundColor Green
-try {
-    $headers = @{ "X-API-Key" = $API_KEY }
-    $response = Invoke-RestMethod -Uri "$BASE_URL/status/nonexistent-job" `
-        -Method Get `
-        -Headers $headers `
-        -ErrorAction Stop
-    $response | ConvertTo-Json | Write-Host
-} catch {
-    if ($_.Exception.Response.StatusCode -eq 404) {
-        Write-Host "✓ Correctly returned 404 (Job not found)" -ForegroundColor Green
-    } else {
-        Write-Host "Response: $($_.Exception.Response.StatusCode) - $_" -ForegroundColor Yellow
+if ($API_KEY) {
+    Write-Host "3. Testing status endpoint with API key (should return 404)..." -ForegroundColor Green
+    try {
+        $headers = @{ "X-API-Key" = $API_KEY }
+        Invoke-RestMethod -Uri "$BASE_URL$API_PREFIX/status/nonexistent-job" `
+            -Method Get `
+            -Headers $headers `
+            -ErrorAction Stop | Out-Null
+    } catch {
+        if ($_.Exception.Response.StatusCode -eq 404) {
+            Write-Host "Correctly returned 404 (job not found)" -ForegroundColor Green
+        } else {
+            Write-Host "Unexpected response: $($_.Exception.Response.StatusCode)" -ForegroundColor Yellow
+        }
     }
+} else {
+    Write-Host "3. Skipping authenticated status test because API_KEY is not set." -ForegroundColor Yellow
 }
 Write-Host ""
 
-# 4. Print URLs
-Write-Host "📚 Documentation URLs:" -ForegroundColor Cyan
-Write-Host "  Swagger UI:  $BASE_URL/docs" -ForegroundColor White
-Write-Host "  ReDoc:       $BASE_URL/redoc" -ForegroundColor White
+Write-Host "4. Swagger docs: $BASE_URL/docs" -ForegroundColor Cyan
+Write-Host "5. ReDoc:       $BASE_URL/redoc" -ForegroundColor Cyan
 Write-Host ""
-
-Write-Host "=======================" -ForegroundColor Cyan
-Write-Host "✓ Testing complete!" -ForegroundColor Green
-Write-Host ""
-Write-Host "📌 Next Steps:" -ForegroundColor Yellow
-Write-Host "  1. Open $BASE_URL/docs in browser for interactive testing"
-Write-Host "  2. Run 'python test_api.py' for production readiness check"
-Write-Host "  3. Check 'PRODUCTION_READY.md' for full checklist"
+Write-Host "====================" -ForegroundColor Cyan
+Write-Host "Testing complete." -ForegroundColor Green

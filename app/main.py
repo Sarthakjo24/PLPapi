@@ -1,31 +1,30 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter
+from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from app.config import settings
 from app.error_handlers import register_error_handlers
 from app.logging_config import setup_logging
 from app.middleware import TimeoutMiddleware
+from app.rate_limiter import limiter
 from app.routes import evaluate, health, status
+from app.services.job_manager import JobManager
+from app.services.pipeline import Pipeline
 
 
-# ── Initialize structured logging ──
-setup_logging(settings.log_level)
+setup_logging(settings.log_level, settings.environment)
 logger = logging.getLogger(__name__)
 
-# ── Rate limiter ──
-limiter = Limiter(key_func=get_remote_address)
 
-
-async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    from fastapi.responses import JSONResponse
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(
         status_code=429,
         content={
@@ -36,43 +35,84 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
     )
 
 
+async def _shutdown_background_tasks(tasks: set[asyncio.Task[Any]]) -> None:
+    if not tasks:
+        return
+
+    logger.info("Waiting for %d background task(s) to finish.", len(tasks))
+    done, pending = await asyncio.wait(tasks, timeout=10)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    for task in done:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.warning("Background task %s was cancelled during shutdown.", task)
+        except Exception:
+            logger.exception("Background task failed during shutdown.")
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # ── startup ──
-    settings.effective_temp_dir  # ensure temp dir exists
+    settings.validate_runtime()
+    settings.effective_temp_dir
+
+    job_manager = getattr(app.state, "job_manager", None) or JobManager()
+    pipeline = getattr(app.state, "pipeline", None) or Pipeline(job_manager=job_manager)
+    background_tasks = getattr(app.state, "background_tasks", None)
+    if background_tasks is None:
+        background_tasks = set()
+
+    app.state.job_manager = job_manager
+    app.state.pipeline = pipeline
+    app.state.background_tasks = background_tasks
+
     logger.info(
-        "PLP Assessment API starting — env=%s model=%s whisper=%s redis=%s",
+        "%s starting: env=%s model=%s whisper=%s redis=%s docs=%s redoc=%s",
+        settings.app_name,
         settings.environment,
         settings.openai_model,
         "faster-whisper" if settings.use_faster_whisper else "openai-only",
-        settings.redis_url.split("@")[-1] if "@" in settings.redis_url else settings.redis_url,
+        settings.masked_redis_url,
+        settings.docs_url,
+        settings.redoc_url,
     )
-    yield
-    # ── shutdown ──
-    logger.info("PLP Assessment API shutting down.")
+    try:
+        yield
+    finally:
+        await _shutdown_background_tasks(app.state.background_tasks)
+
+        pipeline_close = getattr(app.state.pipeline, "close", None)
+        if pipeline_close is not None:
+            await pipeline_close()
+
+        job_manager_close = getattr(app.state.job_manager, "close", None)
+        if job_manager_close is not None:
+            await job_manager_close()
+        logger.info("%s shutting down.", settings.app_name)
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="PLP Assessment API",
-        description="AI-powered candidate assessment service for WMS integration.",
-        version="1.0.0",
-        docs_url=None,  # Temporarily disabled due to OpenAPI schema generation issue
-        redoc_url=None,  # Temporarily disabled due to OpenAPI schema generation issue
+        title=settings.app_name,
+        description=settings.api_description,
+        version=settings.api_version,
+        docs_url=settings.docs_url,
+        redoc_url=settings.redoc_url,
+        openapi_url=settings.openapi_url,
         lifespan=_lifespan,
     )
 
-    # ── Rate limiter ──
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
-
-    # ── Standardized error responses ──
     register_error_handlers(app)
 
-    # ── Request timeout middleware ──
-    app.add_middleware(TimeoutMiddleware, timeout_seconds=settings.request_timeout_seconds)
-
-    # ── CORS ──
+    app.add_middleware(
+        TimeoutMiddleware,
+        timeout_seconds=settings.request_timeout_seconds,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -81,10 +121,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ── Routes ──
-    app.include_router(health.router, prefix="/api/v1")      # no auth
-    app.include_router(evaluate.router, prefix="/api/v1")     # API key required
-    app.include_router(status.router, prefix="/api/v1")       # API key required
+    app.include_router(health.router, prefix=settings.api_prefix)
+    app.include_router(evaluate.router, prefix=settings.api_prefix)
+    app.include_router(status.router, prefix=settings.api_prefix)
 
     return app
 

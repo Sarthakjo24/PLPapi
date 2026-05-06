@@ -1,10 +1,4 @@
-"""Request timeout middleware.
-
-Wraps each incoming request in asyncio.wait_for with a configurable timeout.
-Returns 504 Gateway Timeout if the request handler exceeds the limit.
-
-This prevents hung OpenAI/transcription calls from holding connections forever.
-"""
+"""Request timeout middleware."""
 from __future__ import annotations
 
 import asyncio
@@ -43,7 +37,8 @@ class TimeoutMiddleware(BaseHTTPMiddleware):
                     "error": "Gateway Timeout",
                     "detail": (
                         f"Request exceeded the {self.timeout_seconds}s timeout. "
-                        "The server is still processing your job in the background."
+                        "If this request created a background job, it may still "
+                        "continue processing."
                     ),
                     "status_code": 504,
                 },

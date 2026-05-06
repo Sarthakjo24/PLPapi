@@ -1,20 +1,15 @@
-"""Standardized error responses.
-
-Every error returns consistent JSON:
-  {"error": "Short title", "detail": "Description", "status_code": 500}
-"""
+"""Standardized error responses for the API."""
 from __future__ import annotations
 
 import logging
-import os
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-logger = logging.getLogger(__name__)
+from app.config import settings
 
-_IS_PROD = os.getenv("ENV", "dev").strip().lower() == "prod"
+logger = logging.getLogger(__name__)
 
 
 def _error_response(status_code: int, error: str, detail: str) -> JSONResponse:
@@ -39,11 +34,9 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
 async def _validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    errors = exc.errors()
-    # Build a readable summary of what fields failed
     field_errors = []
-    for err in errors:
-        loc = " → ".join(str(part) for part in err.get("loc", []))
+    for err in exc.errors():
+        loc = " -> ".join(str(part) for part in err.get("loc", []))
         msg = err.get("msg", "Invalid value")
         field_errors.append(f"{loc}: {msg}")
 
@@ -54,12 +47,13 @@ async def _validation_error_handler(
     )
 
 
-async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+async def _unhandled_exception_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
 
-    # Hide internals in production
     detail = "Internal server error. Please try again later."
-    if not _IS_PROD:
+    if not settings.is_prod:
         detail = f"{type(exc).__name__}: {exc}"
 
     return _error_response(

@@ -42,8 +42,8 @@
 - [ ] Data retention (TTL) properly configured
 
 ## 7. Testing ✓
-- [ ] Health endpoint responds: `GET /health`
-- [ ] Status endpoint requires API key: `GET /status/{job_id}`
+- [ ] Health endpoint responds: `GET /api/v1/health`
+- [ ] Status endpoint requires API key: `GET /api/v1/status/{job_id}`
 - [ ] Evaluate endpoint works: `POST /evaluate`
 - [ ] Rate limiting works
 - [ ] Error handling works (400, 401, 429, 500 responses)
@@ -75,7 +75,7 @@
 python test_api.py
 
 # OR test individual endpoints with curl
-curl -X GET "http://localhost:8000/health"
+curl -X GET "http://localhost:8000/api/v1/health"
 curl -X GET "http://localhost:8000/docs"  # Swagger UI
 ```
 

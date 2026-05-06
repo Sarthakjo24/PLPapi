@@ -1,24 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 
-from fastapi import APIRouter, Body, Depends, Request, status
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from fastapi import APIRouter, Depends, Request, status
 
 from app.config import settings
-from app.dependencies import verify_api_key
+from app.dependencies import get_job_manager, get_pipeline, verify_api_key
+from app.rate_limiter import limiter
 from app.schemas import EvaluateRequest, EvaluateResponse
 from app.services.job_manager import JobManager
 from app.services.pipeline import Pipeline
 
-router = APIRouter(tags=["evaluation"], dependencies=[Depends(verify_api_key)])
-limiter = Limiter(key_func=get_remote_address)
+logger = logging.getLogger(__name__)
 
-# Shared instances (initialized at import, reused across requests)
-_job_manager = JobManager()
-_pipeline = Pipeline(job_manager=_job_manager)
+router = APIRouter(tags=["evaluation"], dependencies=[Depends(verify_api_key)])
+
+
+def _cleanup_background_task(task: asyncio.Task[None], background_tasks: set) -> None:
+    background_tasks.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.warning("Background task %s was cancelled.", task.get_name())
+    except Exception:
+        logger.exception("Background task %s failed.", task.get_name())
 
 
 @router.post(
@@ -29,49 +36,32 @@ _pipeline = Pipeline(job_manager=_job_manager)
 @limiter.limit(settings.rate_limit_evaluate)
 async def submit_evaluation(
     request: Request,
-    payload: EvaluateRequest = Body(...),
+    payload: EvaluateRequest,
+    job_manager: JobManager = Depends(get_job_manager),
+    pipeline: Pipeline = Depends(get_pipeline),
 ) -> EvaluateResponse:
-    """Submit a full session (1-10 questions) for AI evaluation.
-
-    Returns a job_id immediately. Poll /status/{job_id} for results.
-    """
-    errors: list[str] = []
-    for q in payload.questions:
-        if not q.recording_url.strip():
-            errors.append(f"Missing recording_url for question {q.question_id}.")
-        if not q.standard_responses or all(
-            not s.strip() for s in q.standard_responses
-        ):
-            errors.append(
-                f"Missing standard_responses for question {q.question_id}."
-            )
-        if not q.question_text.strip():
-            errors.append(f"Missing question_text for question {q.question_id}.")
-
-    if errors:
-        return EvaluateResponse(
-            job_id=None,
-            status="rejected",
-            message=(
-                "Payload validation failed. Please resend with corrections: "
-                + "; ".join(errors)
-            ),
-        )
-
-    # ── Create job and start background processing ──
+    """Submit a full session for AI evaluation."""
     job_id = str(uuid.uuid4())
-    await _job_manager.create_job(
+    await job_manager.create_job(
         job_id=job_id,
         session_id=payload.session_id,
         question_count=len(payload.questions),
     )
 
-    # Fire-and-forget background task
-    asyncio.create_task(_pipeline.process_session(job_id, payload))
+    background_task = asyncio.create_task(
+        pipeline.process_session(job_id, payload),
+        name=f"pipeline:{job_id}",
+    )
+    request.app.state.background_tasks.add(background_task)
+    background_task.add_done_callback(
+        lambda task: _cleanup_background_task(task, request.app.state.background_tasks)
+    )
 
     return EvaluateResponse(
         job_id=job_id,
         status="received",
-        message=f"Job received. {len(payload.questions)} questions queued for evaluation.",
-        poll_url=f"/api/v1/status/{job_id}",
+        message=(
+            f"Job received. {len(payload.questions)} questions queued for evaluation."
+        ),
+        poll_url=f"{settings.api_prefix}/status/{job_id}",
     )

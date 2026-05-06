@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import unicodedata
@@ -13,6 +12,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from app.config import settings
+from app.utils.helpers import normalize_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ _ALLOWED_LANGUAGES = {"en", "hi"}
 
 
 class TranscriptionService:
-    """Transcribe audio files using faster-whisper (subprocess) with OpenAI fallback."""
+    """Transcribe audio files using faster-whisper with OpenAI fallback."""
 
     def __init__(self, semaphore: asyncio.Semaphore | None = None) -> None:
         self._semaphore = semaphore or asyncio.Semaphore(
@@ -35,20 +35,18 @@ class TranscriptionService:
             )
 
     async def transcribe(self, audio_path: Path) -> dict:
-        """Transcribe an audio file. Returns dict with transcript_text and metadata."""
+        """Transcribe an audio file."""
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
         async with self._semaphore:
             if settings.use_faster_whisper:
                 try:
-                    payload = await asyncio.to_thread(
-                        self._run_subprocess, audio_path
-                    )
+                    payload = await asyncio.to_thread(self._run_subprocess, audio_path)
                     return self._postprocess(payload)
                 except Exception as fw_err:
                     logger.warning(
-                        "Faster-whisper failed for %s: %s — trying OpenAI fallback",
+                        "Faster-whisper failed for %s: %s; trying OpenAI fallback",
                         audio_path.name,
                         fw_err,
                     )
@@ -66,10 +64,10 @@ class TranscriptionService:
     async def _transcribe_openai(self, audio_path: Path) -> dict:
         if self._openai is None:
             raise RuntimeError("OpenAI client not configured.")
-        with audio_path.open("rb") as f:
+        with audio_path.open("rb") as file_handle:
             response = await self._openai.audio.transcriptions.create(
                 model="gpt-4o-mini-transcribe",
-                file=f,
+                file=file_handle,
                 prompt=(
                     "Transcribe speech only if it is English or Hindi. "
                     "Return transcript in Roman script only (English/Hinglish). "
@@ -82,9 +80,7 @@ class TranscriptionService:
         }
 
     def _run_subprocess(self, audio_path: Path) -> dict:
-        device = (
-            "cpu" if sys.platform == "win32" else settings.faster_whisper_device
-        )
+        device = "cpu" if sys.platform == "win32" else settings.faster_whisper_device
         compute_type = (
             "float32"
             if sys.platform == "win32"
@@ -129,7 +125,7 @@ class TranscriptionService:
         return json.loads(stdout)
 
     def _postprocess(self, payload: dict) -> dict:
-        text = self._normalize(payload.get("transcript_text"))
+        text = normalize_transcript(payload.get("transcript_text"))
         lang = str(payload.get("detected_language") or "").strip().lower()
 
         if lang and lang not in _ALLOWED_LANGUAGES:
@@ -142,13 +138,11 @@ class TranscriptionService:
         payload["transcript_text"] = text
         return payload
 
-    @staticmethod
-    def _normalize(text: object) -> str:
-        cleaned = " ".join(str(text or "").split()).strip()
-        if not cleaned:
-            return ""
-        cleaned = re.sub(r"[\u0000-\u001f\u007f]+", " ", cleaned).strip()
-        return " ".join(cleaned.split())
+    async def close(self) -> None:
+        """Close the OpenAI client if present."""
+        if self._openai is not None:
+            await self._openai.close()
+            self._openai = None
 
     @staticmethod
     def _is_latin(text: str) -> bool:
