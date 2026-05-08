@@ -15,7 +15,7 @@ from app.error_handlers import register_error_handlers
 from app.logging_config import setup_logging
 from app.middleware import TimeoutMiddleware
 from app.rate_limiter import limiter
-from app.routes import evaluate, health, status
+from app.routes import evaluate, health, status, transcript
 from app.services.job_manager import JobManager
 from app.services.pipeline import Pipeline
 
@@ -122,6 +122,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router, prefix=settings.api_prefix)
+    app.include_router(transcript.router, prefix=settings.api_prefix)
     app.include_router(evaluate.router, prefix=settings.api_prefix)
     app.include_router(status.router, prefix=settings.api_prefix)
 

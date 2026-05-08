@@ -6,32 +6,37 @@ import time
 from typing import Any
 
 from app.config import settings
-from app.schemas import EvaluateRequest, QuestionPayload
-from app.services.audio_downloader import AudioDownloader
+from app.schemas import EvaluateRequest
 from app.services.evaluation import EvaluationService
 from app.services.job_manager import JobManager
-from app.services.transcription import TranscriptionService
+from app.schemas import QuestionPayload
 
 logger = logging.getLogger(__name__)
 
 
 class Pipeline:
-    """Orchestrate download -> transcribe -> evaluate -> store for a session."""
+    """Session pipeline: evaluate using transcript_text supplied by the frontend.
+
+    Transcription is intentionally decoupled into /api/v1/transcript.
+    """
 
     def __init__(
         self,
         job_manager: JobManager,
-        downloader: AudioDownloader | None = None,
-        transcription: TranscriptionService | None = None,
+        downloader: Any | None = None,
+        transcription: Any | None = None,
         evaluation: EvaluationService | None = None,
     ) -> None:
+        # downloader/transcription are accepted for backward compatibility.
+        # Evaluation no longer downloads/transcribes, but we still honor cleanup
+        # for callers/tests that inject a downloader.
+        _ = transcription
         self.jobs = job_manager
-        self.downloader = downloader or AudioDownloader()
-        self.transcription = transcription or TranscriptionService()
+        self.downloader = downloader
         self.evaluation = evaluation or EvaluationService()
 
     async def process_session(self, job_id: str, request: EvaluateRequest) -> None:
-        """Run the full evaluation pipeline."""
+        """Run evaluation pipeline with retry semantics for the whole session."""
         retry_count = 0
         while retry_count <= settings.max_retries:
             try:
@@ -69,7 +74,11 @@ class Pipeline:
                         retry_count=retry_count,
                     )
             finally:
-                self.downloader.cleanup_session(job_id)
+                if self.downloader is not None and hasattr(self.downloader, "cleanup_session"):
+                    try:
+                        self.downloader.cleanup_session(job_id)
+                    except Exception:
+                        logger.exception("Downloader cleanup_session failed for job %s", job_id)
 
     async def _run(
         self, job_id: str, request: EvaluateRequest, retry_count: int
@@ -80,7 +89,7 @@ class Pipeline:
         await self.jobs.update_status(
             job_id,
             status="processing",
-            message="Downloading and processing audio recordings...",
+            message="Evaluating transcripts...",
             retry_count=retry_count,
         )
 
@@ -101,7 +110,7 @@ class Pipeline:
                 "total_score": result["total_score"],
                 "strengths": result["strengths"],
                 "improvement_areas": result["improvement_areas"],
-                "transcript_excerpt": result["transcript"][:400],
+                "transcript_excerpt": (result.get("transcript") or "")[:400],
             }
             for result in question_results
             if result.get("total_score") is not None
@@ -137,15 +146,10 @@ class Pipeline:
         module_title: str,
         scoring_weights: dict[str, float],
     ) -> dict[str, Any]:
-        """Download, transcribe, and evaluate a single question."""
-        audio_path = await self.downloader.download(
-            url=str(question.recording_url),
-            session_id=job_id,
-            question_id=question.question_id,
-        )
+        """Evaluate a single question using transcript_text supplied by frontend."""
+        transcript_text = str(question.transcript_text or "").strip()
 
-        transcription_result = await self.transcription.transcribe(audio_path)
-        transcript_text = transcription_result.get("transcript_text", "")
+        # Preserve legacy progress semantics: transcription is now "already done" by frontend.
         await self.jobs.increment_progress(job_id, transcribed=1)
 
         evaluation_result = await self.evaluation.evaluate_answer(
@@ -168,9 +172,7 @@ class Pipeline:
             "empathy_score": float(sentiment.get("empathy") or 0),
             "respect_score": float(sentiment.get("respect") or 0),
             "tone_score": float(sentiment.get("tone") or 0),
-            "communication_score": float(
-                handling.get("communication_clarity") or 0
-            ),
+            "communication_score": float(handling.get("communication_clarity") or 0),
             "strengths": evaluation_result.get("strengths", []),
             "improvement_areas": evaluation_result.get("improvement_areas", []),
             "summary": str(evaluation_result.get("final_summary") or ""),
@@ -178,6 +180,4 @@ class Pipeline:
 
     async def close(self) -> None:
         """Close pipeline dependencies."""
-        await self.downloader.close()
-        await self.transcription.close()
         await self.evaluation.close()

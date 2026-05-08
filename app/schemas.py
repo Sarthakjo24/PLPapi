@@ -10,11 +10,13 @@ class StrictModel(BaseModel):
 
 
 class QuestionPayload(StrictModel):
-    """A single question with its recording URL and reference responses."""
+    """A single question plus the transcript text produced by the transcription service."""
 
     question_id: str = Field(min_length=1, max_length=100)
     question_text: str = Field(min_length=1)
-    recording_url: AnyHttpUrl
+    transcript_text: str = Field(default="", min_length=0)
+    # Kept for backward compatibility; evaluation no longer downloads/transcribes.
+    recording_url: AnyHttpUrl | None = None
     standard_responses: list[str] = Field(min_length=1, max_length=10)
 
     @field_validator("standard_responses")
@@ -132,3 +134,28 @@ class HealthResponse(StrictModel):
     environment: str
     dependencies: dict[str, str]
     docs: dict[str, str | None]
+
+
+class TranscriptUploadAckResponse(StrictModel):
+    job_id: str
+    status: Literal["received"]
+    message: str
+    poll_url: str
+
+
+class TranscriptJobStatusResponse(StrictModel):
+    job_id: str
+    status: Literal["received", "processing", "completed", "retrying", "failed", "unknown"]
+    transcript_text: str | None = None
+    message: str | None = None
+    retry_count: int | None = None
+    error_detail: str | None = None
+    elapsed_seconds: float | None = None
+
+
+class TranscriptResponse(StrictModel):
+    job_id: str
+    status: Literal["success", "failed"]
+    message: str
+    transcript_text: str | None = None
+    error_detail: str | None = None

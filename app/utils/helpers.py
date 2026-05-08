@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 
 def extract_json_object(text: str) -> dict:
@@ -95,3 +96,9 @@ def coerce_list_points(value: object, limit: int = 3) -> list[str]:
     ]
     cleaned = [p for p in parts if p]
     return cleaned[:limit] if cleaned else [text][:1]
+
+
+def ensure_dir(path: Path) -> Path:
+    """Ensure a directory exists and return the resolved Path."""
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
